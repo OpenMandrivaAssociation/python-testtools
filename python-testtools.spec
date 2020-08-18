@@ -11,6 +11,7 @@ License:        MIT
 URL:            https://github.com/testing-cabal/testtools
 Source0:        https://pypi.io/packages/source/t/%{srcname}/%{srcname}-%version.tar.gz
 Patch0:         testtools-1.8.0-py3.patch
+Patch1:         https://github.com/mtreinish/testtools/commit/38fc9a9e302f68d471d7b097c7327b4ff7348790.patch
 
 BuildRequires:  pkgconfig(python)
 BuildRequires:  python3dist(setuptools)
@@ -19,7 +20,7 @@ BuildRequires:	python3dist(pbr)
 BuildArch:      noarch
 Requires:       python3dist(python-mimeparse)
 Requires:       python3dist(traceback2)
-Requires:       python3dist(unittest2)
+#Requires:       python3dist(unittest2)
 
 %description
 testtools is a set of extensions to the Python standard library’s unit
@@ -32,6 +33,8 @@ sources.
 
 # make the Python 3 build load the Python 3.x compatibility library directly
 %patch0 -p1 -b .py3
+
+%patch1 -p1
 
 find . -name '*.py' | xargs sed -i '1s|^#!python|#!%{__python3}|'
 rm testtools/_compat2x.py
