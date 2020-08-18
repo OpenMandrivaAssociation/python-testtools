@@ -1,0 +1,288 @@
+From 38fc9a9e302f68d471d7b097c7327b4ff7348790 Mon Sep 17 00:00:00 2001
+From: Matthew Treinish <mtreinish@kortar.org>
+Date: Fri, 3 May 2019 18:46:33 -0400
+Subject: [PATCH] Remove unittest2 usage from testtools
+
+Currently testtools bases all of it's unittest extensions off of
+unittest2 instead of the stdlib unittest. At one point this made sense
+since unittest2 provided a stable base as unittest in stdlib added
+features. But it's been ~5 years since there was a unittest2 release
+(or a patch merged) and things have changed since then. The best
+example of this is of the supported python versions listed in the
+unittest2 project description/README only one is still supported by
+upstream python, 2.7, which goes end of life at the end of this year.
+
+More specific to testtools the use of unittest2 causes a whole slew of
+issues because of differences in behavior with stdlib unittest. For
+example here a couple issues encountered:
+
+https://bugs.launchpad.net/testtools/+bug/1467558
+https://bugs.launchpad.net/testtools/+bug/1417803
+mtreinish/stestr#238
+testing-cabal/testtools#272
+
+which are caused, at least in part, by unittest2. There are likely other
+bugs related to it that haven't been reported (or I just missed/forgot
+about). At this point it's better to remove the unittest2 usage and just
+rely on the upstream stdlib unittest which if nothing else is actively
+maintained. It'll improve compatibility using the testtools runner with
+stdlib unittest test suites and removes the class of bugs caused by the differences in unittest2.
+
+Fixes #263
+---
+ requirements.txt                              |  1 -
+ testtools/run.py                              |  5 +---
+ testtools/testcase.py                         | 26 ++++++++++++++-----
+ testtools/tests/test_run.py                   |  8 +++---
+ testtools/tests/test_testsuite.py             |  9 +++----
+ .../tests/twistedsupport/test_deferred.py     |  2 +-
+ .../tests/twistedsupport/test_matchers.py     |  2 +-
+ .../tests/twistedsupport/test_runtest.py      |  2 +-
+ testtools/testsuite.py                        |  5 ++--
+ 9 files changed, 33 insertions(+), 27 deletions(-)
+
+diff --git a/requirements.txt b/requirements.txt
+index d86040f5..026b29da 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -4,6 +4,5 @@ fixtures>=1.3.0
+ # 'mimeparse' has not been uploaded by the maintainer with Python3 compat
+ # but someone kindly uploaded a fixed version as 'python-mimeparse'.
+ python-mimeparse
+-unittest2>=1.0.0
+ traceback2
+ six>=1.4.0
+diff --git a/testtools/run.py b/testtools/run.py
+index 3e19a2de..93438254 100755
+--- a/testtools/run.py
++++ b/testtools/run.py
+@@ -15,7 +15,7 @@
+ 
+ from extras import safe_hasattr, try_imports
+ # To let setup.py work, make this a conditional import.
+-unittest = try_imports(['unittest2', 'unittest'])
++import unittest
+ 
+ from testtools import TextTestResult, testcase
+ from testtools.compat import classtypes, istext, unicode_output_stream
+@@ -25,9 +25,6 @@
+ defaultTestLoader = unittest.defaultTestLoader
+ defaultTestLoaderCls = unittest.TestLoader
+ have_discover = True
+-# This shouldn't really be public - its legacy.  Try to set it if we can, and
+-# if we can't (during installs before unittest2 is installed) just stub it out
+-# to None.
+ discover_impl = getattr(unittest, 'loader', None)
+ 
+ # Kept for API compatibility, but no longer used.
+diff --git a/testtools/testcase.py b/testtools/testcase.py
+index c6166cf9..3b3daa26 100644
+--- a/testtools/testcase.py
++++ b/testtools/testcase.py
+@@ -16,6 +16,7 @@
+     'unique_text_generator',
+     ]
+ 
++import collections
+ import copy
+ import functools
+ import itertools
+@@ -27,8 +28,7 @@
+     try_import,
+     try_imports,
+     )
+-# To let setup.py work, make this a conditional import.
+-unittest = try_imports(['unittest2', 'unittest'])
++import unittest
+ import six
+ 
+ from testtools import (
+@@ -66,7 +66,6 @@
+ class TestSkipped(Exception):
+     """Raised within TestCase.run() when a test is skipped."""
+ TestSkipped = try_import('unittest.case.SkipTest', TestSkipped)
+-TestSkipped = try_import('unittest2.case.SkipTest', TestSkipped)
+ 
+ 
+ class _UnexpectedSuccess(Exception):
+@@ -77,8 +76,6 @@ class _UnexpectedSuccess(Exception):
+     """
+ _UnexpectedSuccess = try_import(
+     'unittest.case._UnexpectedSuccess', _UnexpectedSuccess)
+-_UnexpectedSuccess = try_import(
+-    'unittest2.case._UnexpectedSuccess', _UnexpectedSuccess)
+ 
+ 
+ class _ExpectedFailure(Exception):
+@@ -89,8 +86,6 @@ class _ExpectedFailure(Exception):
+     """
+ _ExpectedFailure = try_import(
+     'unittest.case._ExpectedFailure', _ExpectedFailure)
+-_ExpectedFailure = try_import(
+-    'unittest2.case._ExpectedFailure', _ExpectedFailure)
+ 
+ 
+ # Copied from unittest before python 3.4 release. Used to maintain
+@@ -497,6 +492,23 @@ def assertThat(self, matchee, matcher, message='', verbose=False):
+         if mismatch_error is not None:
+             raise mismatch_error
+ 
++    def assertItemsEqual(self, a, b, message=''):
++        """An unordered sequence specific comparison. It asserts that
++        actual_seq and expected_seq have the same element counts.
++        Equivalent to::
++            self.assertEqual(Counter(iter(actual_seq)),
++                             Counter(iter(expected_seq)))
++        Asserts that each element has the same count in both sequences.
++        Example:
++            - [0, 1, 1] and [1, 0, 1] compare equal.
++            - [0, 0, 1] and [0, 1] compare unequal.
++        """
++        if hasattr(self, 'assertCountEqual'):
++            self.assertCountEqual(a, b, message)
++        else:
++            self.assertEqual(collections.Counter(iter(a)),
++                             collections.Counter(iter(b)))
++
+     def addDetailUniqueName(self, name, content_object):
+         """Add a detail to the test, but ensure it's name is unique.
+ 
+diff --git a/testtools/tests/test_run.py b/testtools/tests/test_run.py
+index 433b6f89..3a5d3fcc 100644
+--- a/testtools/tests/test_run.py
++++ b/testtools/tests/test_run.py
+@@ -10,7 +10,7 @@
+ from extras import try_import
+ fixtures = try_import('fixtures')
+ testresources = try_import('testresources')
+-import unittest2
++import unittest
+ 
+ import testtools
+ from testtools import TestCase, run, skipUnless
+@@ -195,13 +195,13 @@ def test_run_list_failed_import(self):
+         broken = self.useFixture(SampleTestFixture(broken=True))
+         out = StringIO()
+         # XXX: http://bugs.python.org/issue22811
+-        unittest2.defaultTestLoader._top_level_dir = None
++        unittest.defaultTestLoader._top_level_dir = None
+         exc = self.assertRaises(
+             SystemExit,
+             run.main, ['prog', 'discover', '-l', broken.package.base, '*.py'], out)
+         self.assertEqual(2, exc.args[0])
+         self.assertThat(out.getvalue(), DocTestMatches("""\
+-unittest2.loader._FailedTest.runexample
++unittest.loader._FailedTest.runexample
+ Failed to import test module: runexample
+ Traceback (most recent call last):
+   File ".../loader.py", line ..., in _find_test_path
+@@ -345,7 +345,7 @@ def test_issue_16662(self):
+         pkg = self.useFixture(SampleLoadTestsPackage())
+         out = StringIO()
+         # XXX: http://bugs.python.org/issue22811
+-        unittest2.defaultTestLoader._top_level_dir = None
++        unittest.defaultTestLoader._top_level_dir = None
+         self.assertEqual(None, run.main(
+             ['prog', 'discover', '-l', pkg.package.base], out))
+         self.assertEqual(dedent("""\
+diff --git a/testtools/tests/test_testsuite.py b/testtools/tests/test_testsuite.py
+index 02dda708..e49d8c18 100644
+--- a/testtools/tests/test_testsuite.py
++++ b/testtools/tests/test_testsuite.py
+@@ -5,7 +5,6 @@
+ import doctest
+ from pprint import pformat
+ import unittest
+-import unittest2
+ 
+ from extras import try_import
+ 
+@@ -223,9 +222,9 @@ def setUpClass(cls):
+                 raise cls.skipException('foo')
+             def test_notrun(self):
+                 pass
+-        # Test discovery uses the default suite from unittest2 (unless users
++        # Test discovery uses the default suite from unittest (unless users
+         # deliberately change things, in which case they keep both pieces).
+-        suite = unittest2.TestSuite([Skips("test_notrun")])
++        suite = unittest.TestSuite([Skips("test_notrun")])
+         log = []
+         result = LoggingResult(log)
+         suite.run(result)
+@@ -240,9 +239,9 @@ def setUpClass(cls):
+                 super(Simples, cls).setUpClass()
+             def test_simple(self):
+                 pass
+-        # Test discovery uses the default suite from unittest2 (unless users
++        # Test discovery uses the default suite from unittest (unless users
+         # deliberately change things, in which case they keep both pieces).
+-        suite = unittest2.TestSuite([Simples("test_simple")])
++        suite = unittest.TestSuite([Simples("test_simple")])
+         log = []
+         result = LoggingResult(log)
+         suite.run(result)
+diff --git a/testtools/tests/twistedsupport/test_deferred.py b/testtools/tests/twistedsupport/test_deferred.py
+index 308b4157..a91ad542 100644
+--- a/testtools/tests/twistedsupport/test_deferred.py
++++ b/testtools/tests/twistedsupport/test_deferred.py
+@@ -52,5 +52,5 @@ def test_failure(self):
+ 
+ 
+ def test_suite():
+-    from unittest2 import TestLoader, TestSuite
++    from unittest import TestLoader, TestSuite
+     return TestLoader().loadTestsFromName(__name__)
+diff --git a/testtools/tests/twistedsupport/test_matchers.py b/testtools/tests/twistedsupport/test_matchers.py
+index 6ee0fda6..3dc6f007 100644
+--- a/testtools/tests/twistedsupport/test_matchers.py
++++ b/testtools/tests/twistedsupport/test_matchers.py
+@@ -205,5 +205,5 @@ def test_no_result_fails(self):
+ 
+ 
+ def test_suite():
+-    from unittest2 import TestLoader, TestSuite
++    from unittest import TestLoader, TestSuite
+     return TestLoader().loadTestsFromName(__name__)
+diff --git a/testtools/tests/twistedsupport/test_runtest.py b/testtools/tests/twistedsupport/test_runtest.py
+index e3c8ab2d..366fc4a5 100644
+--- a/testtools/tests/twistedsupport/test_runtest.py
++++ b/testtools/tests/twistedsupport/test_runtest.py
+@@ -1016,7 +1016,7 @@ def test_something(self):
+ 
+ 
+ def test_suite():
+-    from unittest2 import TestLoader, TestSuite
++    from unittest import TestLoader, TestSuite
+     return TestLoader().loadTestsFromName(__name__)
+ 
+ 
+diff --git a/testtools/testsuite.py b/testtools/testsuite.py
+index eb2f5f87..ee5b86b8 100644
+--- a/testtools/testsuite.py
++++ b/testtools/testsuite.py
+@@ -18,7 +18,6 @@
+ 
+ from extras import safe_hasattr, try_imports
+ # This is just to let setup.py work, as testtools is imported in setup.py.
+-unittest2 = try_imports(['unittest2', 'unittest'])
+ Queue = try_imports(['Queue.Queue', 'queue.Queue'])
+ 
+ import testtools
+@@ -36,7 +35,7 @@ def iterate_tests(test_suite_or_case):
+                 yield subtest
+ 
+ 
+-class ConcurrentTestSuite(unittest2.TestSuite):
++class ConcurrentTestSuite(unittest.TestSuite):
+     """A TestSuite whose run() calls out to a concurrency strategy."""
+ 
+     def __init__(self, suite, make_tests, wrap_result=None):
+@@ -199,7 +198,7 @@ def _run_test(self, test, process_result, route_code):
+             process_result.stopTestRun()
+ 
+ 
+-class FixtureSuite(unittest2.TestSuite):
++class FixtureSuite(unittest.TestSuite):
+ 
+     def __init__(self, fixture, tests):
+         super(FixtureSuite, self).__init__(tests)
